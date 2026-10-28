@@ -1,0 +1,23 @@
+{
+  "name": "birthday-surprise-portal",
+  "version": "1.0.0",
+  "description": "Interactive Birthday Surprise Web Application with 3D unboxing, musical envelope, memories gallery, and video messages",
+  "private": true,
+  "scripts": {
+    "build": "npm --prefix client install && npm --prefix client run build && npm --prefix server install",
+    "build:client": "npm --prefix client run build",
+    "start": "node server/index.js",
+    "server": "npm --prefix server run dev",
+    "client": "npm --prefix client run dev"
+  },
+  "keywords": [
+    "birthday",
+    "celebration",
+    "interactive",
+    "3d",
+    "react",
+    "express"
+  ],
+  "author": "",
+  "license": "ISC"
+}

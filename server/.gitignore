@@ -1,0 +1,20 @@
+# Server Dependencies
+node_modules/
+
+# Environment Variables & Secrets
+.env
+.env.*
+.env.local
+!.env.example
+
+# Uploaded User Files
+uploads/*
+!uploads/.gitkeep
+!uploads/videos/
+uploads/videos/*
+!uploads/videos/.gitkeep
+
+# Logs & OS Files
+logs/
+*.log
+.DS_Store
