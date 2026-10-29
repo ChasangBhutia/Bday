@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Sparkles } from 'lucide-react';
 import CelebrationBuilder from './components/Builder/CelebrationBuilder';
 import CelebrationView from './components/Recipient/CelebrationView';
-import { loadCelebration } from './utils/storage';
+import { loadCelebration, inMemoryCelebrationCache } from './utils/storage';
 import { DEFAULT_CELEBRATION } from './utils/defaultCelebration';
 
 export default function App() {
@@ -24,7 +24,13 @@ export default function App() {
         try {
           const loaded = await loadCelebration();
           if (!isCancelled) {
-            setActiveCelebration(loaded);
+            if (loaded && loaded.recipientName && loaded.recipientName !== 'Sophia') {
+              setActiveCelebration(loaded);
+            } else if (activeCelebration && activeCelebration.recipientName && activeCelebration.recipientName !== 'Sophia') {
+              // Preserve already loaded active custom celebration
+            } else if (loaded) {
+              setActiveCelebration(loaded);
+            }
             setCurrentView('celebration');
             window.scrollTo(0, 0);
           }
@@ -59,9 +65,17 @@ export default function App() {
   }, []);
 
   const handleLaunchCelebration = (data) => {
-    setActiveCelebration(data);
+    const celebrationId = (data.id && data.id !== 'bday_sample')
+      ? data.id
+      : `bday_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const fullData = { ...data, id: celebrationId };
+
+    setActiveCelebration(fullData);
+    inMemoryCelebrationCache.set(celebrationId, fullData);
+    inMemoryCelebrationCache.set('active_celebration', fullData);
+
     window.scrollTo(0, 0);
-    window.location.hash = `#celebrate?id=${data.id || 'bday_sample'}`;
+    window.location.hash = `#celebrate?id=${celebrationId}`;
   };
 
   const handleBackToBuilder = () => {
@@ -88,7 +102,10 @@ export default function App() {
           onBackToBuilder={handleBackToBuilder}
         />
       ) : (
-        <CelebrationBuilder onLaunchCelebration={handleLaunchCelebration} />
+        <CelebrationBuilder
+          initialCelebration={activeCelebration}
+          onLaunchCelebration={handleLaunchCelebration}
+        />
       )}
     </div>
   );

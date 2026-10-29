@@ -3,22 +3,35 @@ import { DEFAULT_CELEBRATION } from './defaultCelebration';
 const STORAGE_KEY_PREFIX = 'bday_surprises_';
 const LATEST_KEY = 'bday_latest_id';
 
-// Use environment variable if set (e.g. VITE_API_URL=https://api.yourdomain.com), otherwise relative ''
-const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+// Fallback to user's Render backend URL if not set
+const FALLBACK_RENDER_API = 'https://bday-ved0.onrender.com';
+export const API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  (typeof window !== 'undefined' &&
+   (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? ''
+    : FALLBACK_RENDER_API);
 
-// --- INDEXEDDB STORAGE FOR LARGE VIDEO / AUDIO BLOBS ---
+// In-memory instant cache for active session
+export const inMemoryCelebrationCache = new Map();
+
+// --- INDEXEDDB STORAGE FOR LARGE VIDEO / AUDIO / FULL CELEBRATIONS ---
 const IDB_NAME = 'BirthdayMediaDB';
-const IDB_VERSION = 1;
-const IDB_STORE = 'videos';
+const IDB_VERSION = 2;
+const IDB_STORE_VIDEOS = 'videos';
+const IDB_STORE_CELEBRATIONS = 'celebrations';
 
-function openVideoDB() {
+function openAppDB() {
   return new Promise((resolve, reject) => {
     if (typeof indexedDB === 'undefined') return reject(new Error('IndexedDB not supported'));
     const req = indexedDB.open(IDB_NAME, IDB_VERSION);
     req.onupgradeneeded = (e) => {
       const db = e.target.result;
-      if (!db.objectStoreNames.contains(IDB_STORE)) {
-        db.createObjectStore(IDB_STORE, { keyPath: 'id' });
+      if (!db.objectStoreNames.contains(IDB_STORE_VIDEOS)) {
+        db.createObjectStore(IDB_STORE_VIDEOS, { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains(IDB_STORE_CELEBRATIONS)) {
+        db.createObjectStore(IDB_STORE_CELEBRATIONS, { keyPath: 'id' });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -26,12 +39,75 @@ function openVideoDB() {
   });
 }
 
+export async function saveCelebrationToIndexedDB(celebration) {
+  if (!celebration || !celebration.id) return false;
+  try {
+    const db = await openAppDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE_CELEBRATIONS, 'readwrite');
+      const store = tx.objectStore(IDB_STORE_CELEBRATIONS);
+      const putReq = store.put({
+        id: celebration.id,
+        data: celebration,
+        updatedAt: Date.now()
+      });
+      // Also cache as active_celebration
+      store.put({
+        id: 'active_celebration',
+        data: celebration,
+        updatedAt: Date.now()
+      });
+      putReq.onsuccess = () => resolve(true);
+      putReq.onerror = () => reject(putReq.error);
+    });
+  } catch (e) {
+    console.warn('IndexedDB celebration save warning:', e);
+    return false;
+  }
+}
+
+export async function getCelebrationFromIndexedDB(id) {
+  try {
+    const db = await openAppDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(IDB_STORE_CELEBRATIONS, 'readonly');
+      const store = tx.objectStore(IDB_STORE_CELEBRATIONS);
+      const targetId = id || 'active_celebration';
+      const getReq = store.get(targetId);
+      getReq.onsuccess = () => {
+        if (getReq.result && getReq.result.data) {
+          resolve(getReq.result.data);
+        } else {
+          // If requested specific ID not found, check active_celebration
+          if (targetId !== 'active_celebration') {
+            const fallbackReq = store.get('active_celebration');
+            fallbackReq.onsuccess = () => {
+              if (fallbackReq.result && fallbackReq.result.data) {
+                resolve(fallbackReq.result.data);
+              } else {
+                resolve(null);
+              }
+            };
+            fallbackReq.onerror = () => resolve(null);
+          } else {
+            resolve(null);
+          }
+        }
+      };
+      getReq.onerror = () => reject(getReq.error);
+    });
+  } catch (e) {
+    console.warn('IndexedDB celebration get notice:', e);
+    return null;
+  }
+}
+
 export async function saveVideoToIndexedDB(fileOrBlob, id = 'active_birthday_video') {
   try {
-    const db = await openVideoDB();
+    const db = await openAppDB();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(IDB_STORE, 'readwrite');
-      const store = tx.objectStore(IDB_STORE);
+      const tx = db.transaction(IDB_STORE_VIDEOS, 'readwrite');
+      const store = tx.objectStore(IDB_STORE_VIDEOS);
       const putReq = store.put({
         id,
         blob: fileOrBlob,
@@ -50,10 +126,10 @@ export async function saveVideoToIndexedDB(fileOrBlob, id = 'active_birthday_vid
 
 export async function getVideoFromIndexedDB(id = 'active_birthday_video') {
   try {
-    const db = await openVideoDB();
+    const db = await openAppDB();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(IDB_STORE, 'readonly');
-      const store = tx.objectStore(IDB_STORE);
+      const tx = db.transaction(IDB_STORE_VIDEOS, 'readonly');
+      const store = tx.objectStore(IDB_STORE_VIDEOS);
       const getReq = store.get(id);
       getReq.onsuccess = () => {
         if (getReq.result && getReq.result.blob) {
@@ -85,7 +161,8 @@ export async function uploadVideoFile(file) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s for video upload
 
-    const res = await fetch(`${API_BASE_URL}/api/upload-video`, {
+    const uploadEndpoint = API_BASE_URL ? `${API_BASE_URL}/api/upload-video` : '/api/upload-video';
+    const res = await fetch(uploadEndpoint, {
       method: 'POST',
       body: formData,
       signal: controller.signal
@@ -163,35 +240,65 @@ export function decodeCelebrationData(encoded) {
 
 /**
  * Save celebration:
- * 1. Safely saves to localStorage without hitting QuotaExceeded
- * 2. Syncs to Express / MongoDB backend API
+ * 1. Immediate in-memory cache update
+ * 2. High-capacity IndexedDB persistence (stores full photos/video without quota limits)
+ * 3. Safe localStorage persistence (never throws QuotaExceeded)
+ * 4. Syncs to Express / MongoDB backend API
  */
 export async function saveCelebration(data) {
-  const id = data.id || `bday_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-  const payload = { ...data, id, updatedAt: new Date().toISOString() };
+  // Generate a clean, unique ID if default or empty
+  const id = (data.id && data.id !== 'bday_sample')
+    ? data.id
+    : `bday_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
-  // Prepare a safe payload for localStorage (omitting base64 strings >200kb to prevent QuotaExceededError)
-  const localSafePayload = {
-    ...payload,
-    video: payload.video && payload.video.url && payload.video.url.startsWith('data:') && payload.video.url.length > 200000
-      ? { ...payload.video, url: '' } // Preserve title, actual blob stored in IndexedDB or backend
-      : payload.video
+  const payload = {
+    ...data,
+    id,
+    updatedAt: new Date().toISOString()
   };
 
-  // 1. Instant local persistence
+  // 1. Instant in-memory cache
+  inMemoryCelebrationCache.set(id, payload);
+  inMemoryCelebrationCache.set('active_celebration', payload);
+
+  // 2. High-capacity IndexedDB save (can store hundreds of megabytes safely)
   try {
-    localStorage.setItem(STORAGE_KEY_PREFIX + id, JSON.stringify(localSafePayload));
-    localStorage.setItem(LATEST_KEY, id);
+    await saveCelebrationToIndexedDB(payload);
   } catch (e) {
-    console.warn('LocalStorage save notice (handling gracefully):', e);
+    console.warn('IndexedDB save warning:', e);
   }
 
-  // 2. Sync to Backend API with generous timeout
+  // 3. Prepare quota-safe payload for localStorage
+  // Large base64 strings (>50KB) are stripped from localStorage to prevent QuotaExceededError
+  try {
+    const localSafePayload = {
+      ...payload,
+      images: (payload.images || []).map(img => ({
+        id: img.id,
+        caption: img.caption,
+        alt: img.alt,
+        url: img.url && img.url.length < 50000 ? img.url : ''
+      })),
+      video: payload.video && payload.video.url && payload.video.url.length > 50000
+        ? { title: payload.video.title, url: '' }
+        : payload.video
+    };
+
+    localStorage.setItem(STORAGE_KEY_PREFIX + id, JSON.stringify(localSafePayload));
+    localStorage.setItem(LATEST_KEY, id);
+    // Also save as draft celebration
+    localStorage.setItem('bday_draft_celebration', JSON.stringify(localSafePayload));
+  } catch (e) {
+    console.warn('LocalStorage save notice (handled gracefully):', e);
+  }
+
+  // 4. Sync to Backend API with 20s timeout (allows cold Render instance to wake)
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 8000);
+    const timeoutId = setTimeout(() => controller.abort(), 20000);
 
-    const res = await fetch(`${API_BASE_URL}/api/celebrations`, {
+    const apiEndpoint = API_BASE_URL ? `${API_BASE_URL}/api/celebrations` : '/api/celebrations';
+    const res = await fetch(apiEndpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -204,11 +311,13 @@ export async function saveCelebration(data) {
     if (res.ok) {
       const json = await res.json();
       if (json && json.data) {
+        // Merge saved data into caches
+        inMemoryCelebrationCache.set(id, json.data);
         return json.data;
       }
     }
   } catch (err) {
-    console.warn('Backend server sync skipped or offline; local cache preserved:', err.message);
+    console.warn('Backend server sync notice (using local storage):', err.message);
   }
 
   return payload;
@@ -216,27 +325,20 @@ export async function saveCelebration(data) {
 
 /**
  * Load celebration by id or from URL hash:
- * 1. Checks URL hash for inline encoded `data=`
- * 2. Checks browser localStorage for instant retrieval
- * 3. Fetches from backend API `/api/celebrations/:id`
- * 4. Recovers local IndexedDB video if available
- * 5. Falls back to default celebration
+ * 1. Checks in-memory session cache
+ * 2. Checks URL hash for inline encoded `data=`
+ * 3. Checks IndexedDB for full celebration data
+ * 4. Checks browser localStorage
+ * 5. Fetches from backend API `/api/celebrations/:id`
+ * 6. Recovers local IndexedDB video if available
+ * 7. Falls back to default celebration only if no custom data exists
  */
 export async function loadCelebration(idFromUrl) {
   try {
     let result = null;
     const hash = window.location.hash || '';
 
-    // 1. Check if full data is encoded in the URL hash query
-    if (hash.includes('data=')) {
-      const match = hash.match(/data=([^&]+)/);
-      if (match && match[1]) {
-        const decoded = decodeCelebrationData(match[1]);
-        if (decoded) result = decoded;
-      }
-    }
-
-    // 2. Check if specific ID is requested in hash or parameter
+    // 1. Check if specific ID is requested
     let idToFetch = idFromUrl;
     if (!idToFetch && hash.includes('id=')) {
       const match = hash.match(/id=([^&]+)/);
@@ -256,24 +358,74 @@ export async function loadCelebration(idFromUrl) {
       idToFetch = localStorage.getItem(LATEST_KEY);
     }
 
-    // Check localStorage
-    let localData = null;
-    if (idToFetch) {
+    // A. Check in-memory session cache first (instant!)
+    if (idToFetch && inMemoryCelebrationCache.has(idToFetch)) {
+      result = inMemoryCelebrationCache.get(idToFetch);
+    } else if (inMemoryCelebrationCache.has('active_celebration')) {
+      const active = inMemoryCelebrationCache.get('active_celebration');
+      if (active && (!idToFetch || active.id === idToFetch || idToFetch === 'bday_sample')) {
+        result = active;
+      }
+    }
+
+    // B. Check if full data is encoded in the URL hash query
+    if (!result && hash.includes('data=')) {
+      const match = hash.match(/data=([^&]+)/);
+      if (match && match[1]) {
+        const decoded = decodeCelebrationData(match[1]);
+        if (decoded) result = decoded;
+      }
+    }
+
+    // C. Check IndexedDB for full rich celebration
+    if (!result && idToFetch) {
+      try {
+        const idbData = await getCelebrationFromIndexedDB(idToFetch);
+        if (idbData && idbData.recipientName) {
+          result = idbData;
+        }
+      } catch (idbErr) {
+        console.warn('IndexedDB celebration lookup notice:', idbErr);
+      }
+    }
+
+    // D. Check localStorage
+    if (!result && idToFetch) {
       const stored = localStorage.getItem(STORAGE_KEY_PREFIX + idToFetch);
       if (stored) {
         try {
-          localData = JSON.parse(stored);
+          const parsed = JSON.parse(stored);
+          if (parsed && parsed.recipientName) {
+            result = parsed;
+          }
         } catch {}
       }
     }
 
-    // 3. Fetch from Backend API (crucial for sharing across devices/browsers)
-    if (idToFetch) {
+    // Also check draft celebration if nothing found yet
+    if (!result) {
+      const draft = localStorage.getItem('bday_draft_celebration');
+      if (draft) {
+        try {
+          const parsedDraft = JSON.parse(draft);
+          if (parsedDraft && parsedDraft.recipientName && (!idToFetch || parsedDraft.id === idToFetch)) {
+            result = parsedDraft;
+          }
+        } catch {}
+      }
+    }
+
+    // E. Fetch from Backend API (essential for cross-device sharing)
+    if (idToFetch && idToFetch !== 'bday_sample') {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 4000);
+        const timeoutId = setTimeout(() => controller.abort(), 12000);
 
-        const res = await fetch(`${API_BASE_URL}/api/celebrations/${encodeURIComponent(idToFetch)}`, {
+        const apiEndpoint = API_BASE_URL
+          ? `${API_BASE_URL}/api/celebrations/${encodeURIComponent(idToFetch)}`
+          : `/api/celebrations/${encodeURIComponent(idToFetch)}`;
+
+        const res = await fetch(apiEndpoint, {
           signal: controller.signal
         });
         clearTimeout(timeoutId);
@@ -282,8 +434,9 @@ export async function loadCelebration(idFromUrl) {
           const json = await res.json();
           if (json && json.success && json.data) {
             result = json.data;
+            inMemoryCelebrationCache.set(idToFetch, json.data);
             try {
-              localStorage.setItem(STORAGE_KEY_PREFIX + idToFetch, JSON.stringify(json.data));
+              await saveCelebrationToIndexedDB(json.data);
             } catch {}
           }
         }
@@ -292,15 +445,12 @@ export async function loadCelebration(idFromUrl) {
       }
     }
 
-    if (!result && localData) {
-      result = localData;
-    }
-
+    // F. If still no result, fallback to DEFAULT_CELEBRATION
     if (!result) {
       result = { ...DEFAULT_CELEBRATION };
     }
 
-    // Check if video URL is missing or blob expired, and check IndexedDB
+    // G. Recover local IndexedDB video if missing or blob expired
     if (result && (!result.video?.url || result.video.url.startsWith('blob:'))) {
       try {
         const idbVideoUrl = await getVideoFromIndexedDB();
@@ -327,13 +477,14 @@ export async function loadCelebration(idFromUrl) {
 export function generateShareUrl(data) {
   const origin = window.location.origin;
   const pathname = window.location.pathname;
-  const id = data.id || 'bday_sample';
+  const id = data.id || `bday_${Date.now()}`;
 
   // Create a clean payload (exclude massive >50kb base64 to keep QR code scannable)
   const compactData = {
     id: data.id,
     recipientName: data.recipientName,
     senderName: data.senderName,
+    date: data.date,
     milestone: data.milestone,
     relationship: data.relationship,
     message: data.message,

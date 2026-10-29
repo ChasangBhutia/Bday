@@ -2,7 +2,13 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Camera, Video, X, Maximize2, Sparkles, Heart, AlertCircle, Play, RefreshCw, ExternalLink } from 'lucide-react';
 import { getVideoFromIndexedDB } from '../../utils/storage';
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || '';
+const FALLBACK_RENDER_API = 'https://bday-ved0.onrender.com';
+const API_BASE_URL =
+  import.meta.env.VITE_API_URL ||
+  (typeof window !== 'undefined' &&
+   (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+    ? ''
+    : FALLBACK_RENDER_API);
 
 export default function PhotoGallery({ images = [], video = null, recipientName = 'Sophia' }) {
   const [selectedPhoto, setSelectedPhoto] = useState(null);

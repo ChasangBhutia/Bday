@@ -5,6 +5,7 @@ export const DEFAULT_CELEBRATION = {
   recipientName: 'Sophia',
   senderName: 'Liam & Friends',
   milestone: '22nd',
+  date: new Date().toISOString().split('T')[0],
   relationship: 'Best Friend',
   message: `Dearest Sophia,\n\nHappy Birthday! Today is all about celebrating the most radiant, wonderful person in our lives.\n\nThank you for bringing so much laughter, warmth, and adventure into every single day. From our late-night drives to countless inside jokes, every memory with you is a treasure I cherish deeply.\n\nMay this year ahead bring you endless happiness, exciting new horizons, and all the love you deserve so effortlessly.\n\nKeep shining bright, and let's make this year the most unforgettable chapter yet!\n\nWith all my love and biggest hugs,\nAlways yours,`,
   envelopeStyle: 'rose-velvet',
@@ -182,4 +183,27 @@ export const GIFT_ITEMS = {
     tagline: 'Unlimited Fun & Love'
   }
 };
+
+export function formatCelebrationDate(dateString) {
+  if (!dateString) return '';
+  try {
+    const parts = String(dateString).split('-');
+    if (parts.length === 3) {
+      const year = parseInt(parts[0], 10);
+      const month = parseInt(parts[1], 10) - 1;
+      const day = parseInt(parts[2], 10);
+      const d = new Date(year, month, day);
+      if (!isNaN(d.getTime())) {
+        return d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+      }
+    }
+    const d = new Date(dateString);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+    }
+    return String(dateString);
+  } catch {
+    return String(dateString);
+  }
+}
 

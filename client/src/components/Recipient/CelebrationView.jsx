@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import confetti from 'canvas-confetti';
-import { Sparkles, Heart, PartyPopper, Music, ArrowDown, Share2, PlusCircle, Volume2 } from 'lucide-react';
+import { Sparkles, Heart, PartyPopper, Music, ArrowDown, Share2, PlusCircle, Volume2, Calendar } from 'lucide-react';
 import FloatingElements from './FloatingElements';
 import InteractiveGift from './InteractiveGift';
 import EnvelopeLetter from './EnvelopeLetter';
@@ -9,6 +9,7 @@ import PhotoGallery from './PhotoGallery';
 import WishesWall from './WishesWall';
 import AudioPlayerWidget from './AudioPlayerWidget';
 import { soundManager } from '../../utils/soundEffects';
+import { formatCelebrationDate } from '../../utils/defaultCelebration';
 
 export default function CelebrationView({ celebrationData, onBackToBuilder }) {
   const [giftOpened, setGiftOpened] = useState(false);
@@ -19,6 +20,7 @@ export default function CelebrationView({ celebrationData, onBackToBuilder }) {
   const recipientName = celebrationData?.recipientName || 'Sophia';
   const senderName = celebrationData?.senderName || 'Your Loved Ones';
   const milestone = celebrationData?.milestone || '';
+  const date = celebrationData?.date || '';
   const message = celebrationData?.message || '';
   const envelopeStyle = celebrationData?.envelopeStyle || 'rose-velvet';
   const giftStyle = celebrationData?.giftStyle || 'crimson-gold';
@@ -95,9 +97,18 @@ export default function CelebrationView({ celebrationData, onBackToBuilder }) {
       {/* Hero Welcome Stage */}
       <main className="relative z-20 max-w-5xl mx-auto px-4 pt-8 sm:pt-14 text-center">
         {/* Animated Celebration Badge */}
-        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-gradient-to-r from-pink-500/20 via-purple-500/20 to-amber-500/20 border border-pink-400/30 text-pink-200 text-xs sm:text-sm font-semibold tracking-wide backdrop-blur-md mb-4 shadow-lg shadow-pink-500/10 animate-float-gentle">
-          <Sparkles className="w-4 h-4 text-amber-300" />
-          <span>It's Your Special Day! 🌟</span>
+        <div className="flex flex-col sm:flex-row items-center justify-center gap-2 mb-4">
+          <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-gradient-to-r from-pink-500/20 via-purple-500/20 to-amber-500/20 border border-pink-400/30 text-pink-200 text-xs sm:text-sm font-semibold tracking-wide backdrop-blur-md shadow-lg shadow-pink-500/10 animate-float-gentle">
+            <Sparkles className="w-4 h-4 text-amber-300" />
+            <span>It's Your Special Day! 🌟</span>
+          </div>
+
+          {date && (
+            <div className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full bg-slate-900/80 border border-pink-500/30 text-amber-200 text-xs font-semibold backdrop-blur-md shadow-sm">
+              <Calendar className="w-3.5 h-3.5 text-pink-400" />
+              <span>{formatCelebrationDate(date)}</span>
+            </div>
+          )}
         </div>
 
         <h1 className="text-3xl sm:text-6xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-300 via-rose-100 to-amber-200 tracking-tight leading-tight sm:leading-tight">
@@ -131,6 +142,7 @@ export default function CelebrationView({ celebrationData, onBackToBuilder }) {
             recipientName={recipientName}
             senderName={senderName}
             milestone={milestone}
+            date={date}
             message={message}
             hasMusic={!!musicData}
             onLetterOpened={handleLetterOpened}

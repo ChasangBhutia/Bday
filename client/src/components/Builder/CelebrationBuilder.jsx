@@ -25,8 +25,58 @@ import { saveCelebration, generateShareUrl, uploadVideoFile } from '../../utils/
 import { soundManager } from '../../utils/soundEffects';
 import ShareModal from './ShareModal';
 
-export default function CelebrationBuilder({ onLaunchCelebration }) {
-  const [formData, setFormData] = useState({ ...DEFAULT_CELEBRATION });
+// Client-side image compression: prevents quota errors and fast-tracks mobile uploads
+function compressImage(file, maxWidth = 1200, quality = 0.82) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target.result;
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+        if (width > maxWidth || height > maxWidth) {
+          if (width > height) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          } else {
+            width = Math.round((width * maxWidth) / height);
+            height = maxWidth;
+          }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL('image/jpeg', quality));
+      };
+      img.onerror = (err) => reject(err);
+    };
+    reader.onerror = (err) => reject(err);
+  });
+}
+
+export default function CelebrationBuilder({ onLaunchCelebration, initialCelebration }) {
+  const [formData, setFormData] = useState(() => {
+    if (initialCelebration && initialCelebration.recipientName && initialCelebration.recipientName !== 'Sophia') {
+      return { ...initialCelebration };
+    }
+    try {
+      const draft = localStorage.getItem('bday_draft_celebration');
+      if (draft) {
+        const parsed = JSON.parse(draft);
+        if (parsed && parsed.recipientName && parsed.recipientName !== 'Sophia') {
+          return { ...DEFAULT_CELEBRATION, ...parsed };
+        }
+      }
+    } catch {}
+    return {
+      ...DEFAULT_CELEBRATION,
+      id: `bday_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
+    };
+  });
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [shareUrl, setShareUrl] = useState('');
   const [isPlayingAudioPreview, setIsPlayingAudioPreview] = useState(false);
@@ -41,6 +91,28 @@ export default function CelebrationBuilder({ onLaunchCelebration }) {
   const [videoUploadError, setVideoUploadError] = useState('');
   const [videoUrlInput, setVideoUrlInput] = useState('');
   const [videoTitleInput, setVideoTitleInput] = useState('');
+
+  // Reset & Preset handlers
+  const handleStartFresh = () => {
+    setFormData({
+      ...DEFAULT_CELEBRATION,
+      id: `bday_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      recipientName: '',
+      senderName: '',
+      milestone: '',
+      date: new Date().toISOString().split('T')[0],
+      message: '',
+      images: [],
+      video: { url: '', title: '' }
+    });
+  };
+
+  const handleLoadSample = () => {
+    setFormData({
+      ...DEFAULT_CELEBRATION,
+      id: `bday_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`
+    });
+  };
 
   // Handle generic text fields
   const handleChange = (field, value) => {
@@ -61,41 +133,61 @@ export default function CelebrationBuilder({ onLaunchCelebration }) {
     setFormData(prev => ({ ...prev, message: msg }));
   };
 
-  // Image Upload handler (Base64)
-  const handleImageFileUpload = (e) => {
+  // Image Upload handler with instant compression
+  const handleImageFileUpload = async (e) => {
     const files = Array.from(e.target.files);
-    files.forEach(file => {
-      const reader = new FileReader();
-      reader.onload = (uploadEvent) => {
-        const base64Url = uploadEvent.target.result;
-        setFormData(prev => ({
-          ...prev,
-          images: [
-            ...prev.images,
-            {
-              id: `img_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-              url: base64Url,
-              caption: file.name.replace(/\.[^/.]+$/, '') || 'Cherished Memory'
-            }
-          ]
-        }));
-      };
-      reader.readAsDataURL(file);
-    });
+    if (!files.length) return;
+
+    // Replace sample stock photos if only default photos exist
+    const isOnlyDefaultPhotos = formData.images.every(img => String(img.id).startsWith('img-'));
+    const baseImages = isOnlyDefaultPhotos ? [] : [...formData.images];
+
+    for (const file of files) {
+      try {
+        const compressedBase64 = await compressImage(file, 1200, 0.82);
+        baseImages.push({
+          id: `img_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+          url: compressedBase64,
+          caption: file.name.replace(/\.[^/.]+$/, '') || 'Cherished Memory'
+        });
+      } catch (err) {
+        console.warn('Image compression fallback:', err);
+        const reader = new FileReader();
+        reader.onload = (uploadEvent) => {
+          setFormData(prev => ({
+            ...prev,
+            images: [
+              ...prev.images,
+              {
+                id: `img_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                url: uploadEvent.target.result,
+                caption: file.name.replace(/\.[^/.]+$/, '') || 'Cherished Memory'
+              }
+            ]
+          }));
+        };
+        reader.readAsDataURL(file);
+      }
+    }
+
+    setFormData(prev => ({
+      ...prev,
+      images: baseImages
+    }));
   };
 
   const handleAddImageUrl = () => {
     if (!newImageUrl.trim()) return;
+    const isOnlyDefaultPhotos = formData.images.every(img => String(img.id).startsWith('img-'));
+    const baseImages = isOnlyDefaultPhotos ? [] : [...formData.images];
+    baseImages.push({
+      id: `img_${Date.now()}`,
+      url: newImageUrl.trim(),
+      caption: newImageCaption.trim() || 'A Beautiful Memory'
+    });
     setFormData(prev => ({
       ...prev,
-      images: [
-        ...prev.images,
-        {
-          id: `img_${Date.now()}`,
-          url: newImageUrl.trim(),
-          caption: newImageCaption.trim() || 'A Beautiful Memory'
-        }
-      ]
+      images: baseImages
     }));
     setNewImageUrl('');
     setNewImageCaption('');
@@ -281,6 +373,24 @@ export default function CelebrationBuilder({ onLaunchCelebration }) {
           <p className="mt-3 text-sm sm:text-base text-slate-400 max-w-xl mx-auto">
             Design an interactive experience with 3D gift unboxing, realistic envelope tearing, custom background music, video messages, and instant QR sharing!
           </p>
+
+          {/* Quick preset controls */}
+          <div className="mt-4 flex items-center justify-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={handleStartFresh}
+              className="px-3.5 py-1.5 rounded-full bg-slate-900/90 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-700 text-xs font-medium transition-all shadow-sm cursor-pointer"
+            >
+              ✨ Clear & Start Blank Form
+            </button>
+            <button
+              type="button"
+              onClick={handleLoadSample}
+              className="px-3.5 py-1.5 rounded-full bg-slate-900/90 hover:bg-slate-800 text-pink-300 hover:text-pink-200 border border-pink-500/30 text-xs font-medium transition-all shadow-sm cursor-pointer"
+            >
+              🎁 Load Sample Demo
+            </button>
+          </div>
         </header>
 
         {/* Builder Form Sections */}
@@ -294,7 +404,7 @@ export default function CelebrationBuilder({ onLaunchCelebration }) {
               <span>Who is this celebration for? 🌟</span>
             </h2>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
                   Recipient's Name
@@ -305,6 +415,18 @@ export default function CelebrationBuilder({ onLaunchCelebration }) {
                   onChange={(e) => handleChange('recipientName', e.target.value)}
                   placeholder="e.g. Sophia"
                   className="w-full px-4 py-3 rounded-xl bg-slate-900/80 border border-slate-700/80 focus:border-pink-500 focus:ring-1 focus:ring-pink-500 text-sm text-white placeholder-slate-500 transition-all"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
+                  Birthday Date 📅
+                </label>
+                <input
+                  type="date"
+                  value={formData.date || ''}
+                  onChange={(e) => handleChange('date', e.target.value)}
+                  className="w-full px-4 py-3 rounded-xl bg-slate-900/80 border border-slate-700/80 focus:border-pink-500 focus:ring-1 focus:ring-pink-500 text-sm text-white transition-all cursor-pointer"
                 />
               </div>
 
@@ -323,7 +445,7 @@ export default function CelebrationBuilder({ onLaunchCelebration }) {
 
               <div>
                 <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
-                  From (Sender Name)
+                  From (Your Name / Sender)
                 </label>
                 <input
                   type="text"
@@ -334,7 +456,7 @@ export default function CelebrationBuilder({ onLaunchCelebration }) {
                 />
               </div>
 
-              <div>
+              <div className="sm:col-span-2 lg:col-span-2">
                 <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-2">
                   Relationship
                 </label>
@@ -534,6 +656,17 @@ export default function CelebrationBuilder({ onLaunchCelebration }) {
                     className="hidden"
                   />
                 </label>
+
+                {formData.images.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setFormData(prev => ({ ...prev, images: [] }))}
+                    className="inline-flex items-center justify-center gap-1.5 px-4 py-3 rounded-xl bg-slate-900 hover:bg-rose-900/40 text-slate-400 hover:text-rose-300 border border-slate-700 hover:border-rose-700/50 text-xs font-semibold transition-all cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5 text-rose-400" />
+                    <span>Clear All Photos ({formData.images.length})</span>
+                  </button>
+                )}
               </div>
 
               {/* Add Photo via URL */}

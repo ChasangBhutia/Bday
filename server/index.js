@@ -96,7 +96,11 @@ app.use((err, req, res, next) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`🎉 Birthday Backend Server is live on http://localhost:${PORT}`);
-  console.log(`📡 Healthcheck available at: http://localhost:${PORT}/api/health`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`🎉 Birthday Backend Server is live on http://localhost:${PORT}`);
+    console.log(`📡 Healthcheck available at: http://localhost:${PORT}/api/health`);
+  });
+}
+
+module.exports = app;

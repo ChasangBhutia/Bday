@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
 const Celebration = require('../models/Celebration');
-const { isDbConnected, memoryStore, getDbStatus } = require('../db');
+const { isDbConnected, memoryStore, getDbStatus, persistMemoryStore } = require('../db');
 
 // Ensure videos directory exists
 const videosDir = path.join(__dirname, '../uploads/videos');
@@ -109,8 +109,9 @@ router.post('/celebrations', async (req, res) => {
       updatedAt: new Date().toISOString()
     };
 
-    // Always update memory store for instantaneous retrieval
+    // Always update memory store for instantaneous retrieval and persist to backup
     memoryStore.set(celebrationId, payload);
+    persistMemoryStore();
 
     let savedItem = payload;
 
@@ -203,7 +204,7 @@ router.get('/celebrations', async (req, res) => {
       const list = await Celebration.find()
         .sort({ updatedAt: -1 })
         .limit(20)
-        .select('id recipientName senderName milestone relationship envelopeStyle giftStyle giftItem updatedAt');
+        .select('id recipientName senderName milestone date relationship envelopeStyle giftStyle giftItem updatedAt');
       return res.json({ success: true, count: list.length, data: list });
     }
 
@@ -213,6 +214,7 @@ router.get('/celebrations', async (req, res) => {
       recipientName: item.recipientName,
       senderName: item.senderName,
       milestone: item.milestone,
+      date: item.date,
       relationship: item.relationship,
       envelopeStyle: item.envelopeStyle,
       giftStyle: item.giftStyle,

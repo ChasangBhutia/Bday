@@ -1,6 +1,14 @@
 {
   "rewrites": [
     {
+      "source": "/api/:match*",
+      "destination": "https://bday-ved0.onrender.com/api/:match*"
+    },
+    {
+      "source": "/uploads/:match*",
+      "destination": "https://bday-ved0.onrender.com/uploads/:match*"
+    },
+    {
       "source": "/(.*)",
       "destination": "/"
     }

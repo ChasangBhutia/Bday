@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import confetti from 'canvas-confetti';
 import { Mail, Sparkles, Heart, Music, Check, Volume2 } from 'lucide-react';
 import { soundManager } from '../../utils/soundEffects';
-import { ENVELOPE_THEMES } from '../../utils/defaultCelebration';
+import { ENVELOPE_THEMES, formatCelebrationDate } from '../../utils/defaultCelebration';
 
 export default function EnvelopeLetter({
   envelopeStyle = 'rose-velvet',
@@ -10,6 +10,7 @@ export default function EnvelopeLetter({
   senderName = 'Someone who loves you',
   message = '',
   milestone = '',
+  date = '',
   onLetterOpened,
   hasMusic = false
 }) {
@@ -269,7 +270,7 @@ export default function EnvelopeLetter({
                     Sealed with Love
                   </div>
                   <div className="text-[10px] text-amber-800/60 font-sans">
-                    {new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
+                    {date ? formatCelebrationDate(date) : new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}
                   </div>
                 </div>
               </div>

@@ -24,6 +24,11 @@ const CelebrationSchema = new mongoose.Schema(
       default: '',
       trim: true
     },
+    date: {
+      type: String,
+      default: '',
+      trim: true
+    },
     relationship: {
       type: String,
       default: 'Friend',
@@ -97,7 +102,8 @@ const CelebrationSchema = new mongoose.Schema(
     }
   },
   {
-    timestamps: true
+    timestamps: true,
+    strict: false
   }
 );
 

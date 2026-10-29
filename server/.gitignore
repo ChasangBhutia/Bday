@@ -14,6 +14,10 @@ uploads/*
 uploads/videos/*
 !uploads/videos/.gitkeep
 
+# Local Data Backups
+data/*
+!data/.gitkeep
+
 # Logs & OS Files
 logs/
 *.log
