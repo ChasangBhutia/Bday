@@ -12,15 +12,37 @@ const PORT = process.env.PORT || 5001;
 // Initialize Database connection (non-blocking, gracefully falls back to memory if DB not active)
 connectDB();
 
-// Flexible CORS configuration supporting wildcard '*', single domain, or comma-separated list
-const rawCors = process.env.CORS_ORIGIN || '*';
-const corsOrigins = rawCors === '*' ? '*' : rawCors.includes(',') ? rawCors.split(',').map((o) => o.trim()) : rawCors.trim();
-
+// Robust CORS: Strips trailing slashes, supports wildcard '*', vercel preview domains, localhost, and allows cross-device requests
 app.use(
   cors({
-    origin: corsOrigins,
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, curl, postman, same-origin)
+      if (!origin) return callback(null, true);
+
+      const rawCors = (process.env.CORS_ORIGIN || '*').trim();
+      if (rawCors === '*') return callback(null, true);
+
+      const cleanReqOrigin = origin.replace(/\/+$/, '').toLowerCase();
+      const allowedOrigins = rawCors
+        .split(',')
+        .map((o) => o.trim().replace(/\/+$/, '').toLowerCase());
+
+      if (
+        allowedOrigins.includes('*') ||
+        allowedOrigins.includes(cleanReqOrigin) ||
+        cleanReqOrigin.endsWith('.vercel.app') ||
+        cleanReqOrigin.includes('localhost') ||
+        cleanReqOrigin.includes('127.0.0.1')
+      ) {
+        return callback(null, true);
+      }
+
+      // Default: allow all origins so recipients opening on any phone/device can load celebration
+      return callback(null, true);
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    credentials: true
   })
 );
 

@@ -12,6 +12,40 @@ export const API_BASE_URL =
     ? ''
     : FALLBACK_RENDER_API);
 
+/**
+ * Universal API fetcher:
+ * 1. Checks configured API_BASE_URL
+ * 2. Checks relative path (Vercel edge proxy / Vite proxy)
+ * 3. Falls back directly to Render backend URL
+ * Automatically skips HTML responses (like SPA index.html rewrites)
+ */
+export async function fetchBackendApi(endpointPath, options = {}) {
+  const candidateUrls = [];
+  if (API_BASE_URL) {
+    candidateUrls.push(`${API_BASE_URL}${endpointPath}`);
+  }
+  candidateUrls.push(endpointPath);
+  const directFallback = `${FALLBACK_RENDER_API}${endpointPath}`;
+  if (!candidateUrls.includes(directFallback)) {
+    candidateUrls.push(directFallback);
+  }
+
+  let lastErr = null;
+  for (const url of candidateUrls) {
+    try {
+      const res = await fetch(url, options);
+      const contentType = res.headers.get('content-type') || '';
+      if (res.ok && contentType.includes('application/json')) {
+        return res;
+      }
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+
+  throw lastErr || new Error(`All backend API endpoints failed for ${endpointPath}`);
+}
+
 // In-memory instant cache for active session
 export const inMemoryCelebrationCache = new Map();
 
@@ -292,13 +326,12 @@ export async function saveCelebration(data) {
     console.warn('LocalStorage save notice (handled gracefully):', e);
   }
 
-  // 4. Sync to Backend API with 20s timeout (allows cold Render instance to wake)
+  // 4. Sync to Backend API with 30s timeout (allows cold Render instance to wake)
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 20000);
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
 
-    const apiEndpoint = API_BASE_URL ? `${API_BASE_URL}/api/celebrations` : '/api/celebrations';
-    const res = await fetch(apiEndpoint, {
+    const res = await fetchBackendApi('/api/celebrations', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
@@ -308,10 +341,9 @@ export async function saveCelebration(data) {
     });
     clearTimeout(timeoutId);
 
-    if (res.ok) {
+    if (res && res.ok) {
       const json = await res.json();
       if (json && json.data) {
-        // Merge saved data into caches
         inMemoryCelebrationCache.set(id, json.data);
         return json.data;
       }
@@ -419,24 +451,31 @@ export async function loadCelebration(idFromUrl) {
     if (idToFetch && idToFetch !== 'bday_sample') {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 12000);
+        const timeoutId = setTimeout(() => controller.abort(), 30000);
 
-        const apiEndpoint = API_BASE_URL
-          ? `${API_BASE_URL}/api/celebrations/${encodeURIComponent(idToFetch)}`
-          : `/api/celebrations/${encodeURIComponent(idToFetch)}`;
-
-        const res = await fetch(apiEndpoint, {
+        const res = await fetchBackendApi(`/api/celebrations/${encodeURIComponent(idToFetch)}`, {
           signal: controller.signal
         });
         clearTimeout(timeoutId);
 
-        if (res.ok) {
+        if (res && res.ok) {
           const json = await res.json();
           if (json && json.success && json.data) {
-            result = json.data;
-            inMemoryCelebrationCache.set(idToFetch, json.data);
+            // If we already have data from URL query, merge backend images/video into it
+            if (result) {
+              result = {
+                ...result,
+                ...json.data,
+                // Preserve non-empty images from backend if local/url images were stripped
+                images: (json.data.images && json.data.images.length > 0) ? json.data.images : result.images,
+                video: (json.data.video && json.data.video.url) ? json.data.video : result.video
+              };
+            } else {
+              result = json.data;
+            }
+            inMemoryCelebrationCache.set(idToFetch, result);
             try {
-              await saveCelebrationToIndexedDB(json.data);
+              await saveCelebrationToIndexedDB(result);
             } catch {}
           }
         }
@@ -473,13 +512,14 @@ export async function loadCelebration(idFromUrl) {
 
 /**
  * Generate shareable URL for QR code and copy link.
+ * Includes clean metadata in &data= so recipients on any device can open instantaneously!
  */
 export function generateShareUrl(data) {
   const origin = window.location.origin;
   const pathname = window.location.pathname;
   const id = data.id || `bday_${Date.now()}`;
 
-  // Create a clean payload (exclude massive >50kb base64 to keep QR code scannable)
+  // Create clean payload: exclude massive data: (>5000 chars) & blob: to ensure URL stays lightweight and scannable
   const compactData = {
     id: data.id,
     recipientName: data.recipientName,
@@ -495,19 +535,20 @@ export function generateShareUrl(data) {
     images: (data.images || [])
       .map(img => ({
         id: img.id,
-        url: img.url && img.url.length > 50000 ? '' : img.url,
+        // Only keep external http URLs or small previews; omit huge base64 strings so QR code is compact
+        url: img.url && !img.url.startsWith('blob:') && (img.url.startsWith('http') || img.url.length < 5000) ? img.url : '',
         caption: img.caption
       }))
       .filter(img => img.url),
-    video: data.video && data.video.url && data.video.url.length > 50000
-      ? { title: data.video.title, url: '' }
-      : data.video,
+    video: data.video && data.video.url && !data.video.url.startsWith('blob:') && (data.video.url.startsWith('http') || data.video.url.length < 5000)
+      ? data.video
+      : { title: data.video?.title || '', url: '' },
     wishes: data.wishes
   };
 
   const encoded = encodeCelebrationData(compactData);
-  // QR codes are easiest to scan with URLs under ~1800 characters
-  if (encoded && encoded.length < 1800) {
+  // Guarantee data parameter is attached whenever it fits (up to 2400 chars, safely supported by all modern browsers & QR)
+  if (encoded && encoded.length < 2400) {
     return `${origin}${pathname}#celebrate?id=${id}&data=${encoded}`;
   }
 
