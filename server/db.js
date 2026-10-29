@@ -2,7 +2,6 @@ const mongoose = require('mongoose');
 const fs = require('fs');
 const path = require('path');
 
-let isDbConnected = false;
 const memoryStore = new Map();
 
 // Local JSON backup path to prevent data loss across restarts if MongoDB Atlas is cold
@@ -55,29 +54,34 @@ async function connectDB() {
       connectTimeoutMS: 10000,
     });
 
-    isDbConnected = true;
     console.log(`✅ [MongoDB] Successfully connected to: ${mongoUri.replace(/\/\/.*@/, '//<credentials>@')}`);
   } catch (err) {
-    isDbConnected = false;
     console.warn(`⚠️ [MongoDB] Connection failed (${err.message}).`);
     console.warn(`🚀 [Storage] Operating seamlessly in In-Memory mode with local disk backup.`);
   }
 
   mongoose.connection.on('disconnected', () => {
-    isDbConnected = false;
     console.warn('⚠️ [MongoDB] Lost connection, using In-Memory fallback.');
   });
 
   mongoose.connection.on('reconnected', () => {
-    isDbConnected = true;
     console.log('✅ [MongoDB] Reconnected successfully.');
   });
 }
 
+function isDbConnected() {
+  return mongoose.connection.readyState === 1 || mongoose.connection.readyState === 2;
+}
+
 function getDbStatus() {
+  const state = mongoose.connection.readyState;
+  const isConnected = state === 1;
+  const isConnecting = state === 2;
   return {
-    isDbConnected,
-    storageMode: isDbConnected ? 'MongoDB' : 'In-Memory Cache (with disk backup)',
+    isDbConnected: isConnected,
+    isConnecting,
+    readyState: state,
+    storageMode: isConnected ? 'MongoDB Atlas' : isConnecting ? 'Connecting to MongoDB Atlas' : 'In-Memory Cache (with disk backup)',
     memoryCount: memoryStore.size
   };
 }
@@ -87,7 +91,5 @@ module.exports = {
   getDbStatus,
   memoryStore,
   persistMemoryStore,
-  get isDbConnected() {
-    return isDbConnected;
-  }
+  isDbConnected
 };

@@ -6,6 +6,9 @@ const multer = require('multer');
 const Celebration = require('../models/Celebration');
 const { isDbConnected, memoryStore, getDbStatus, persistMemoryStore } = require('../db');
 
+// Dynamic DB connection status evaluator
+const checkDbConnected = () => (typeof isDbConnected === 'function' ? isDbConnected() : Boolean(isDbConnected));
+
 // Ensure videos directory exists
 const videosDir = path.join(__dirname, '../uploads/videos');
 if (!fs.existsSync(videosDir)) {
@@ -114,15 +117,20 @@ router.post('/celebrations', async (req, res) => {
     persistMemoryStore();
 
     let savedItem = payload;
+    let storageType = 'in-memory';
 
-    // Persist to MongoDB if connected
-    if (isDbConnected) {
+    // Persist to MongoDB if connected or connecting
+    if (checkDbConnected()) {
       try {
-        savedItem = await Celebration.findOneAndUpdate(
+        const doc = await Celebration.findOneAndUpdate(
           { id: celebrationId },
           payload,
-          { upsert: true, new: true, setDefaultsOnInsert: true }
+          { upsert: true, returnDocument: 'after', setDefaultsOnInsert: true }
         );
+        if (doc) {
+          savedItem = doc.toJSON ? doc.toJSON() : doc;
+          storageType = 'mongodb';
+        }
       } catch (dbErr) {
         console.warn(`[MongoDB save error]: ${dbErr.message}. Preserved in memory store.`);
       }
@@ -133,7 +141,7 @@ router.post('/celebrations', async (req, res) => {
       message: 'Celebration saved successfully',
       data: savedItem,
       id: celebrationId,
-      storage: isDbConnected ? 'mongodb' : 'in-memory'
+      storage: storageType
     });
   } catch (err) {
     console.error('Error saving celebration:', err);
@@ -166,7 +174,7 @@ router.get('/celebrations/:id', async (req, res) => {
     }
 
     // 2. Query MongoDB if connected
-    if (isDbConnected) {
+    if (checkDbConnected()) {
       const doc = await Celebration.findOne({ id });
       if (doc) {
         const docJson = doc.toJSON ? doc.toJSON() : doc;
@@ -200,7 +208,7 @@ router.get('/celebrations/:id', async (req, res) => {
  */
 router.get('/celebrations', async (req, res) => {
   try {
-    if (isDbConnected) {
+    if (checkDbConnected()) {
       const list = await Celebration.find()
         .sort({ updatedAt: -1 })
         .limit(20)
